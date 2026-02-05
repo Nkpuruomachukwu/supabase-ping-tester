@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supabase Region Latency Tester</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        supabase: {
+                            50: '#f4fbf7',
+                            100: '#e0f6eb',
+                            200: '#bfeadd',
+                            300: '#91d6c8',
+                            400: '#5bb8a7',
+                            500: '#3ecf8e', // Supabase Green
+                            600: '#2b9e6c',
+                            700: '#267e58',
+                            800: '#226449',
+                            900: '#1d523d',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .ping-bar {
+            transition: width 0.5s ease-out;
+        }
+        @keyframes pulse-green {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        .testing-pulse {
+            animation: pulse-green 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen font-sans antialiased selection:bg-supabase-500 selection:text-white">
+
+    <div class="max-w-4xl mx-auto px-4 py-12">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <div class="flex justify-center mb-4">
+                <i class="fa-solid fa-bolt text-5xl text-supabase-500"></i>
+            </div>
+            <h1 class="text-4xl font-bold mb-4 tracking-tight">Supabase Region Latency</h1>
+            <p class="text-gray-400 max-w-lg mx-auto">
+                Measure your connection speed to Supabase's global data centers (hosted on AWS). 
+                Choose the region with the lowest latency for your database.
+            </p>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex justify-center mb-10">
+            <button onclick="startTest()" id="startBtn" class="bg-supabase-500 hover:bg-supabase-400 text-gray-900 font-bold py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105 flex items-center gap-2">
+                <i class="fa-solid fa-play"></i>
+                <span id="btnText">Start Latency Test</span>
+            </button>
+        </div>
+
+        <!-- Results Table -->
+        <div class="bg-gray-800 rounded-xl shadow-2xl overflow-hidden border border-gray-700">
+            <div class="grid grid-cols-12 gap-4 p-4 bg-gray-750 border-b border-gray-700 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                <div class="col-span-5 md:col-span-4 pl-2">Region</div>
+                <div class="col-span-3 md:col-span-2 text-right">Latency</div>
+                <div class="col-span-4 md:col-span-6 pl-4">Quality</div>
+            </div>
+            
+            <div id="resultsContainer" class="divide-y divide-gray-700">
+                <!-- Rows will be injected here -->
+            </div>
+        </div>
+        
+        <div class="mt-8 text-center text-xs text-gray-500">
+            <p>Note: Supabase runs on AWS. This tool pings the underlying AWS regional endpoints (DynamoDB) to estimate latency.</p>
+        </div>
+    </div>
+
+    <script>
+        // Supabase/AWS Regions List
+        const regions = [
+            { id: 'us-east-1', name: 'East US (North Virginia)', flag: '🇺🇸' },
+            { id: 'us-east-2', name: 'East US (Ohio)', flag: '🇺🇸' },
+            { id: 'us-west-1', name: 'West US (North California)', flag: '🇺🇸' },
+            { id: 'us-west-2', name: 'West US (Oregon)', flag: '🇺🇸' },
+            { id: 'ca-central-1', name: 'Canada (Central)', flag: '🇨🇦' },
+            { id: 'eu-west-1', name: 'West EU (Ireland)', flag: '🇮🇪' },
+            { id: 'eu-west-2', name: 'West Europe (London)', flag: '🇬🇧' },
+            { id: 'eu-west-3', name: 'West EU (Paris)', flag: '🇫🇷' },
+            { id: 'eu-central-1', name: 'Central EU (Frankfurt)', flag: '🇩🇪' },
+            { id: 'eu-central-2', name: 'Central Europe (Zurich)', flag: '🇨🇭' },
+            { id: 'eu-north-1', name: 'North EU (Stockholm)', flag: '🇸🇪' },
+            { id: 'ap-south-1', name: 'South Asia (Mumbai)', flag: '🇮🇳' },
+            { id: 'ap-southeast-1', name: 'Southeast Asia (Singapore)', flag: '🇸🇬' },
+            { id: 'ap-northeast-1', name: 'Northeast Asia (Tokyo)', flag: '🇯🇵' },
+            { id: 'ap-northeast-2', name: 'Northeast Asia (Seoul)', flag: '🇰🇷' },
+            { id: 'ap-southeast-2', name: 'Oceania (Sydney)', flag: '🇦🇺' },
+            { id: 'sa-east-1', name: 'South America (São Paulo)', flag: '🇧🇷' }
+        ];
+
+        let results = [];
+
+        function init() {
+            const container = document.getElementById('resultsContainer');
+            container.innerHTML = '';
+            
+            regions.forEach(region => {
+                const row = document.createElement('div');
+                row.className = 'grid grid-cols-12 gap-4 p-4 items-center hover:bg-gray-700/50 transition duration-150';
+                row.id = `row-${region.id}`;
+                row.innerHTML = `
+                    <div class="col-span-5 md:col-span-4 flex items-center gap-3">
+                        <span class="text-2xl">${region.flag}</span>
+                        <div class="flex flex-col">
+                            <span class="font-medium text-gray-200 text-sm md:text-base">${region.name}</span>
+                            <span class="text-xs text-gray-500 font-mono">${region.id}</span>
+                        </div>
+                    </div>
+                    <div class="col-span-3 md:col-span-2 text-right font-mono text-gray-300" id="time-${region.id}">
+                        --
+                    </div>
+                    <div class="col-span-4 md:col-span-6 pl-4 flex items-center">
+                        <div class="h-2 w-full bg-gray-700 rounded-full overflow-hidden">
+                            <div id="bar-${region.id}" class="h-full w-0 rounded-full transition-all duration-500"></div>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        async function pingRegion(region) {
+            const start = performance.now();
+            const timeout = 3000;
+            const url = `https://dynamodb.${region.id}.amazonaws.com`;
+
+            try {
+                const controller = new AbortController();
+                const id = setTimeout(() => controller.abort(), timeout);
+
+                await fetch(url, { 
+                    mode: 'no-cors', 
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+                
+                clearTimeout(id);
+                const end = performance.now();
+                return Math.round(end - start);
+            } catch (error) {
+                return 9999; // Timeout or Error
+            }
+        }
+
+        function getQualityColor(ms) {
+            if (ms < 100) return 'bg-emerald-500';
+            if (ms < 200) return 'bg-yellow-500';
+            return 'bg-red-500';
+        }
+
+        async function startTest() {
+            const btn = document.getElementById('startBtn');
+            const btnText = document.getElementById('btnText');
+            
+            btn.disabled = true;
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+            btnText.textContent = 'Testing...';
+
+            results = [];
+            
+            // Reset UI
+            regions.forEach(r => {
+                document.getElementById(`time-${r.id}`).textContent = '...';
+                document.getElementById(`bar-${r.id}`).className = 'h-full w-0 rounded-full transition-all duration-500';
+                document.getElementById(`row-${r.id}`).classList.remove('bg-gray-700/50'); // clear previous sorts
+            });
+
+            // Run Pings
+            const promises = regions.map(async (region) => {
+                // Visual indicator that this row is testing
+                const timeEl = document.getElementById(`time-${region.id}`);
+                timeEl.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin text-supabase-500"></i>';
+                
+                // Average of 3 pings for better accuracy
+                let total = 0;
+                let validPings = 0;
+                
+                // Warm up
+                await pingRegion(region);
+                
+                // Actual test
+                for(let i=0; i<3; i++) {
+                    const latency = await pingRegion(region);
+                    if(latency < 9000) {
+                        total += latency;
+                        validPings++;
+                    }
+                    // Small delay between pings
+                    await new Promise(r => setTimeout(r, 100)); 
+                }
+
+                const avg = validPings > 0 ? Math.round(total / validPings) : 9999;
+                
+                results.push({ ...region, latency: avg });
+                updateRow(region.id, avg);
+            });
+
+            await Promise.all(promises);
+
+            // Sort results
+            sortResults();
+
+            btn.disabled = false;
+            btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            btnText.textContent = 'Test Again';
+        }
+
+        function updateRow(id, latency) {
+            const timeEl = document.getElementById(`time-${id}`);
+            const barEl = document.getElementById(`bar-${id}`);
+
+            if (latency >= 9999) {
+                timeEl.textContent = 'Timeout';
+                barEl.style.width = '100%';
+                barEl.className = 'h-full bg-red-900 rounded-full';
+            } else {
+                timeEl.textContent = latency + 'ms';
+                
+                // Visual bar calculation (cap at 400ms for full bar visually)
+                const percentage = Math.min((latency / 400) * 100, 100);
+                const colorClass = getQualityColor(latency);
+                
+                barEl.className = `h-full rounded-full ${colorClass}`;
+                barEl.style.width = `${percentage}%`;
+            }
+        }
+
+        function sortResults() {
+            const container = document.getElementById('resultsContainer');
+            const rows = Array.from(container.children);
+
+            const sortedRows = rows.sort((a, b) => {
+                const idA = a.id.replace('row-', '');
+                const idB = b.id.replace('row-', '');
+                
+                const resA = results.find(r => r.id === idA);
+                const resB = results.find(r => r.id === idB);
+
+                const latA = resA ? resA.latency : 9999;
+                const latB = resB ? resB.latency : 9999;
+
+                return latA - latB;
+            });
+
+            sortedRows.forEach(row => container.appendChild(row));
+            
+            // Highlight top result
+            if(sortedRows.length > 0) {
+                // sortedRows[0].classList.add('bg-gray-700/50', 'border-l-4', 'border-supabase-500');
+            }
+        }
+
+        // Initialize on load
+        init();
+
+    </script>
+</body>
+</html>
