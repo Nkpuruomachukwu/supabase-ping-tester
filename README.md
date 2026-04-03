@@ -51,3 +51,4 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 *Disclaimer: This tool is not an official Supabase product. It measures latency to the AWS regions where Supabase services are hosted.*
+*JESUS IS KING*
